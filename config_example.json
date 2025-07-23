@@ -1,0 +1,19 @@
+{
+  "api_key": "your_gmo_api_key_here",
+  "api_secret": "your_gmo_api_secret_here",
+  "discord_webhook_url": "your_discord_webhook_url_here",
+  "discord_bot_token": "your_discord_bot_token_here",
+  "spread_threshold": 0.1,
+  "jitter_seconds": 3,
+  "stop_loss_pips": 150,
+  "take_profit_pips": 0,
+  "entry_order_retry_interval": 5,
+  "max_entry_order_attempts": 3,
+  "exit_order_retry_interval": 10,
+  "max_exit_order_attempts": 3,
+  "position_check_interval": 5,
+  "position_check_interval_minutes": 10,
+  "leverage": 20,
+  "risk_ratio": 1.0,
+  "auto_restart_hour": null
+} 
