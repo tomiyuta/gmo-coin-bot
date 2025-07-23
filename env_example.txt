@@ -1,0 +1,11 @@
+# GMOコインAPI認証情報
+GMO_API_KEY=your_api_key_here
+GMO_API_SECRET=your_api_secret_here
+
+# Discord Bot設定
+DISCORD_TOKEN=your_discord_token_here
+DISCORD_WEBHOOK_URL=your_webhook_url_here
+
+# その他の設定
+LOG_LEVEL=INFO
+ENVIRONMENT=production 
