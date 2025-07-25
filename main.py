@@ -252,6 +252,7 @@ current_rate_limit = 20  # 現在のレートリミット（1秒あたりのリ�
 # 取引結果管理用
 total_api_fee = 0      # API手数料累計
 trade_results = []     # 取引結果リスト
+fee_records = []       # 各注文で発生した手数料の履歴 [{'date': date, 'fee': float}]
 symbol_daily_volume = {}  # 銘柄別の一日の取引数量を追跡
 
 # 自動再起動管理用
@@ -736,6 +737,7 @@ def send_order(symbol, side, size=None, leverage=None):
             order_id = response['data'][0]['orderId']
             fee = get_execution_fee(order_id)
             total_api_fee += fee
+            fee_records.append({"date": datetime.now().date(), "fee": fee})
             logging.info(f"API手数料取得: {fee}円")
     except Exception as e:
         logging.error(f"API手数料取得エラー: {e}")
@@ -776,7 +778,9 @@ def close_position(symbol, position_id, size, side):
         order_id = response['data'][0]['orderId']
         try:
             # --- 修正：feeをAPIから取得して加算 ---
-            total_api_fee += get_execution_fee(order_id)
+            fee_val = get_execution_fee(order_id)
+            total_api_fee += fee_val
+            fee_records.append({"date": datetime.now().date(), "fee": fee_val})
             executed_price = get_execution_price(order_id)
             return executed_price
         except Exception as e:
@@ -1074,6 +1078,8 @@ def close_position_by_info(position, exit_time, auto_closed=False, trade_index=N
         "lot_size": position['size'],
         "entry_time": position.get('entry_time', datetime.now().strftime('%H:%M:%S')),
         "exit_time": datetime.now().strftime('%H:%M:%S'),
+        "entry_date": position.get('entry_date', datetime.now().date()),
+        "exit_date": datetime.now().date(),
     })
     close_type = "自動決済" if auto_closed else "予定決済"
     # 証拠金残高取得
@@ -1657,21 +1663,22 @@ def finalize_trades_for_day(target_date):
     # その日分をリセット
     trade_results = remain_results
 
-def daily_finalize_scheduler():
-    """
-    毎日19:00に自動で集計・Discord出力するスレッド
-    """
-    def loop():
-        while True:
-            now = datetime.now()
-            next_19 = now.replace(hour=19, minute=0, second=0, microsecond=0)
-            if now >= next_19:
-                next_19 += timedelta(days=1)
-            wait_seconds = (next_19 - now).total_seconds()
-            time.sleep(wait_seconds)
-            finalize_trades_for_day(target_date=now.date())
-    t = threading.Thread(target=loop, daemon=True)
-    t.start()
+# daily_finalize_scheduler()を廃止 - performanceコマンドで統一
+# def daily_finalize_scheduler():
+#     """
+#     毎日19:00に自動で集計・Discord出力するスレッド
+#     """
+#     def loop():
+#         while True:
+#             now = datetime.now()
+#             next_19 = now.replace(hour=19, minute=0, second=0, microsecond=0)
+#             if now >= next_19:
+#                 next_19 += timedelta(days=1)
+#             wait_seconds = (next_19 - now).total_seconds()
+#             time.sleep(wait_seconds)
+#             finalize_trades_for_day(target_date=now.date())
+#     t = threading.Thread(target=loop, daemon=True)
+#     t.start()
 
 def auto_restart_scheduler():
     """
@@ -1894,8 +1901,8 @@ def execute_daily_trades():
         # 取引実行・監視・決済
         process_trades(filtered_trades)
 
-        # 取引集計・Discord通知
-        finalize_trades_for_day(datetime.now().date())
+        # 取引集計・Discord通知は廃止 - performanceコマンドで統一
+        # finalize_trades_for_day(datetime.now().date())
 
         # 取引完了通知
         send_discord_message("本日の取引が完了しました")
@@ -2030,7 +2037,7 @@ def wait_until_next_day():
 def main():
     global trade_results, total_api_fee
     periodic_position_check()  # 追加: 定期ポジション監視を開始
-    daily_finalize_scheduler()
+    # daily_finalize_scheduler()を廃止 - performanceコマンドで統一
     
     # 自動再起動スケジューラーを起動
     auto_restart_scheduler()
@@ -2188,6 +2195,8 @@ if DISCORD_BOT_TOKEN:
                         "lot_size": size,
                         "entry_time": pos.get('openTime', ''),
                         "exit_time": datetime.now().strftime('%H:%M:%S'),
+                        "entry_date": position.get('entry_date', datetime.now().date()),
+                        "exit_date": datetime.now().date(),
                     })
                     success_count += 1
                 except Exception as e:
@@ -2830,6 +2839,17 @@ def get_performance_report(use_today_only=False, days_offset=None):
     report += f"勝率: {metrics['win_rate']:.1f}%\n"
     report += f"総損益pips: {'+' if metrics['total_profit_pips'] >= 0 else ''}{metrics['total_profit_pips']:.1f}\n"
     report += f"総損益金額: {'+' if metrics['total_profit_amount'] >= 0 else ''}{metrics['total_profit_amount']:.0f}円\n"
+    # 期間別手数料を計算
+    if days_offset is not None:
+        target_date = datetime.now().date() + timedelta(days=days_offset)
+        period_fee = sum(r['fee'] for r in fee_records if r['date'] == target_date)
+    elif use_today_only:
+        today_date = datetime.now().date()
+        period_fee = sum(r['fee'] for r in fee_records if r['date'] == today_date)
+    else:
+        period_fee = sum(r['fee'] for r in fee_records)
+
+    report += f"合計API手数料: {round(period_fee)}円\n"
     report += f"FX口座残高: {balance_amount:.0f}円\n"
     report += f"平均損益pips: {'+' if metrics['average_profit_pips'] >= 0 else ''}{metrics['average_profit_pips']:.1f}\n"
     report += f"最大ドローダウンpips: -{metrics['max_drawdown_pips']:.1f}\n"
@@ -3276,16 +3296,21 @@ def get_today_trades():
     
     for trade in trade_results:
         try:
-            # exit_timeから日付を抽出
-            if 'exit_time' in trade and trade['exit_time']:
-                # exit_timeの形式: 'HH:MM:SS'
-                exit_time_str = trade['exit_time']
-                # 現在の日付と組み合わせてdatetimeオブジェクトを作成
-                exit_datetime = datetime.combine(today, datetime.strptime(exit_time_str, '%H:%M:%S').time())
+            # exit_dateから日付を抽出
+            if 'exit_date' in trade:
+                trade_date = trade['exit_date']
+                if isinstance(trade_date, str):
+                    trade_date = datetime.strptime(trade_date, '%Y-%m-%d').date()
+                elif isinstance(trade_date, datetime):
+                    trade_date = trade_date.date()
                 
                 # 今日の取引かチェック
-                if exit_datetime.date() == today:
+                if trade_date == today:
                     today_trades.append(trade)
+            else:
+                # 後方互換性のため、exit_timeから推定（ただし正確ではない）
+                if 'exit_time' in trade and trade['exit_time']:
+                    logging.warning(f"取引データに日付情報がありません: {trade}")
         except Exception as e:
             logging.warning(f"取引日付解析エラー: {e}, trade: {trade}")
             continue
@@ -3303,11 +3328,23 @@ def get_trades_by_date_offset(days_offset):
             if 'exit_time' in trade and trade['exit_time']:
                 # exit_timeの形式: 'HH:MM:SS'
                 exit_time_str = trade['exit_time']
-                # 現在の日付と組み合わせてdatetimeオブジェクトを作成
-                exit_datetime = datetime.combine(target_date, datetime.strptime(exit_time_str, '%H:%M:%S').time())
+                
+                # 取引データに日付情報があるかチェック
+                if 'exit_date' in trade:
+                    # 日付情報がある場合はそれを使用
+                    trade_date = trade['exit_date']
+                    if isinstance(trade_date, str):
+                        trade_date = datetime.strptime(trade_date, '%Y-%m-%d').date()
+                    elif isinstance(trade_date, datetime):
+                        trade_date = trade_date.date()
+                else:
+                    # 日付情報がない場合は、現在の日付を基準に推定
+                    # ただし、これは正確ではないため、ログに警告を出力
+                    logging.warning(f"取引データに日付情報がありません: {trade}")
+                    continue
                 
                 # 指定日の取引かチェック
-                if exit_datetime.date() == target_date:
+                if trade_date == target_date:
                     target_trades.append(trade)
         except Exception as e:
             logging.warning(f"取引日付解析エラー: {e}, trade: {trade}")
