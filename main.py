@@ -1564,104 +1564,8 @@ def save_daily_results():
     except Exception as e:
         logging.error(f"日次結果保存エラー: {e}")
 
-def finalize_trades_for_day(target_date):
-    """
-    指定日の19:00までに決済された取引のみを集計・Discord通知
-    それ以降の取引はtrade_resultsに残す
-    """
-    global trade_results
-    cutoff = datetime.combine(target_date, datetime.min.time()).replace(hour=19, minute=0, second=0)
-    today_results = []
-    remain_results = []
-    for trade in trade_results:
-        # 決済時刻をdatetime型に変換（タイムゾーン処理改善）
-        exit_time_str = trade.get('exit_time')
-        if exit_time_str:
-            try:
-                # 日付情報がなければtarget_dateを使う
-                if 'T' in exit_time_str or '-' in exit_time_str:
-                    # ISO形式の場合
-                    exit_time_str_clean = exit_time_str.replace('Z', '+00:00')
-                    exit_time = datetime.fromisoformat(exit_time_str_clean)
-                else:
-                    # HH:MM:SS形式の場合
-                    time_obj = datetime.strptime(exit_time_str, '%H:%M:%S').time()
-                    exit_time = datetime.combine(target_date, time_obj)
-            except (ValueError, TypeError) as e:
-                logging.error(f"決済時刻変換エラー: {e}, exit_time_str={exit_time_str}")
-                exit_time = cutoff  # エラー時は当日19:00扱い
-        else:
-            exit_time = cutoff  # 万一なければ当日19:00扱い
-        if exit_time < cutoff:
-            today_results.append(trade)
-        else:
-            remain_results.append(trade)
-    if not today_results:
-        send_discord_message(f"{target_date.strftime('%Y/%m/%d')} 19:00までの取引はありませんでした。")
-        trade_results = remain_results
-        return
-    total_profit_pips = sum(trade['profit_pips'] for trade in today_results)
-    total_profit_amount = sum(trade.get('profit_amount', 0) for trade in today_results)
-    
-    # 口座残高取得（例外処理追加）
-    try:
-        balance_data = get_fx_balance()
-        data = balance_data.get('data')
-        if isinstance(data, list) and len(data) > 0:
-            balance_amount = float(data[0].get('balance', 0))
-        elif isinstance(data, dict):
-            balance_amount = float(data.get('balance', 0))
-        else:
-            balance_amount = 0
-    except Exception as e:
-        logging.error(f"口座残高取得エラー: {e}")
-        balance_amount = 0
-    table_header = "| 通貨ペア | 売買方向 | エントリー価格 | 決済価格 | ロット数 | 損益pips | 損益金額(円) |\n|---|---|---|---|---|---|---|\n"
-    table_rows = "\n".join(
-        f"| {trade['symbol']} | {trade['side']} | {trade['entry_price']} | {trade['exit_price']} | {trade.get('lot_size', 'N/A')} | {trade['profit_pips']:.1f} | {trade.get('profit_amount', 0):.0f} |"
-        for trade in today_results
-    )
-    message = (
-        f"**{target_date.strftime('%Y/%m/%d')} 19:00までの取引結果**\n\n"
-        f"{table_header}{table_rows}\n\n"
-        f"**合計損益pips**: {total_profit_pips:.1f}\n"
-        f"**本日の合計損益**: {total_profit_amount:.0f}円\n"
-        f"**合計API手数料**: {round(total_api_fee)}円\n"
-        f"**FX口座残高**: {balance_amount}円"
-    )
-    send_discord_message(message)
-    # 日次結果を保存
-    today = target_date.strftime('%Y-%m-%d')
-    
-    # daily_resultsディレクトリを作成
-    daily_results_dir = 'daily_results'
-    if not os.path.exists(daily_results_dir):
-        os.makedirs(daily_results_dir)
-        logging.info(f"daily_resultsディレクトリを作成しました: {daily_results_dir}")
-    
-    filename = os.path.join(daily_results_dir, f'daily_results_{today}.csv')
-    try:
-        with open(filename, 'w', newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
-            writer.writerow(['日付', '通貨ペア', '売買方向', 'エントリー価格', '決済価格', 'ロット数', '損益pips', '損益金額(円)', 'エントリー時刻', '決済時刻'])
-            for trade in today_results:
-                writer.writerow([
-                    today,
-                    trade['symbol'],
-                    trade['side'],
-                    trade['entry_price'],
-                    trade['exit_price'],
-                    trade.get('lot_size', 'N/A'),
-                    f"{trade['profit_pips']:.1f}",
-                    f"{trade.get('profit_amount', 0):.0f}",
-                    trade.get('entry_time', 'N/A'),
-                    trade.get('exit_time', 'N/A')
-                ])
-        logging.info(f"日次結果を{filename}に保存しました")
-    except Exception as e:
-        logging.error(f"日次結果保存エラー: {e}")
-    # その日分をリセット
-    trade_results = remain_results
+# finalize_trades_for_day関数を削除
+# 19:00の区切り時間機能は廃止し、日付ベースの分類に統一
 
 # daily_finalize_scheduler()を廃止 - performanceコマンドで統一
 # def daily_finalize_scheduler():
@@ -1902,7 +1806,6 @@ def execute_daily_trades():
         process_trades(filtered_trades)
 
         # 取引集計・Discord通知は廃止 - performanceコマンドで統一
-        # finalize_trades_for_day(datetime.now().date())
 
         # 取引完了通知
         send_discord_message("本日の取引が完了しました")
