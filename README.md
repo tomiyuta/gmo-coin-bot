@@ -246,6 +246,10 @@ setup.bat
     - 短い間隔（5-10分）：安全性重視、API負荷は高くなる
     - 長い間隔（30-60分）：API負荷軽減、未認識ポジションの検出が遅れる
   - **注意：** 通常の取引時間内ではこの機能は動作しません（trades.csvの時間外のみ）
+  - **🛡️ 安全保護機能：**
+    - **エントリー・決済時間の±5秒保護**: trades.csvのエントリー時刻と決済時刻の前後5秒間は監視をスキップ
+    - **誤ったkill実行を防止**: エントリー直後や決済直前の誤った強制決済を防ぐ
+    - **ログ記録**: 保護時間内の監視スキップはログに記録される
 
 #### システム設定項目
 
@@ -457,4 +461,90 @@ Discord通知 + ログ記録
   - `performance` コマンド：今日の取引結果を表示
   - `performance -1` コマンド：前日の取引結果を表示
   - `all` コマンド：全体の取引結果を表示
-- 取引結果は日付ベースで分類され、19:00の区切り時間は使用されません 
+- 取引結果は日付ベースで分類され、19:00の区切り時間は使用されません
+
+## 🔧 技術仕様詳細
+
+### Position監視システムの安全保護機能
+
+#### 概要
+システムは定期的にポジションを監視し、trades.csvの時間外でポジションが残っている場合に自動で強制決済（kill）を実行します。この際、誤ったkill実行を防ぐため、エントリー・決済時間の前後5秒間は監視をスキップする安全保護機能を実装しています。
+
+#### 実装詳細
+
+**1. 保護時間の計算**
+```python
+def is_near_schedule_time(now, schedule, buffer_seconds=5):
+    """
+    現在時刻がエントリー時間または決済時間の前後buffer_seconds秒以内か判定
+    エントリー直後や決済直前の監視を避けるため
+    """
+    for entry, exit in schedule:
+        # エントリー時間の前後buffer_seconds秒
+        entry_start = entry - timedelta(seconds=buffer_seconds)
+        entry_end = entry + timedelta(seconds=buffer_seconds)
+        
+        # 決済時間の前後buffer_seconds秒
+        exit_start = exit - timedelta(seconds=buffer_seconds)
+        exit_end = exit + timedelta(seconds=buffer_seconds)
+        
+        # 現在時刻がエントリー時間または決済時間の前後buffer_seconds秒以内
+        if (entry_start <= now <= entry_end) or (exit_start <= now <= exit_end):
+            return True
+    return False
+```
+
+**2. 監視スキップ処理**
+```python
+def periodic_position_check():
+    """
+    指定分ごとにposition監視。trades.csvの時間外でポジションがあればkill＆discord通知。
+    エントリー時間と決済時間の前後5秒は監視を避ける。
+    """
+    def loop():
+        while True:
+            try:
+                now = datetime.now()
+                schedule = load_trades_schedule()
+                positions = get_all_positions()
+                
+                # エントリー時間または決済時間の前後5秒以内の場合は監視をスキップ
+                if is_near_schedule_time(now, schedule, buffer_seconds=5):
+                    logging.info(f"定期ポジション監視: スケジュール時間前後5秒のため監視をスキップ - {now.strftime('%H:%M:%S')}")
+                    time.sleep(POSITION_CHECK_INTERVAL_MINUTES * 60)
+                    continue
+                
+                # trades.csvの時間外でポジションが存在する場合のみkill
+                if positions and not is_in_trades_schedule(now, schedule):
+                    logging.warning(f"定期ポジション監視: スケジュール時間外のポジションを検出 - {now.strftime('%H:%M:%S')}")
+                    force_kill_all_positions_and_notify()
+```
+
+#### 保護機能の動作例
+
+**trades.csvの例：**
+```csv
+1,買,USD/JPY,09:00:00,17:00:00,
+2,売,EUR/USD,13:00:00,15:00:00,
+```
+
+**保護時間：**
+- **エントリー時間の保護**: 08:59:55～09:00:05, 12:59:55～13:00:05
+- **決済時間の保護**: 16:59:55～17:00:05, 14:59:55～15:00:05
+
+**監視動作：**
+- **保護時間内**: 監視をスキップ、ログに記録
+- **保護時間外**: 通常のポジション監視を実行
+- **スケジュール時間外のポジション発見時**: 自動kill実行
+
+#### ログ出力例
+```
+INFO: 定期ポジション監視: スケジュール時間前後5秒のため監視をスキップ - 09:00:02
+WARNING: 定期ポジション監視: スケジュール時間外のポジションを検出 - 10:30:15
+```
+
+#### 設定可能パラメータ
+- **buffer_seconds**: 保護時間の秒数（デフォルト: 5秒）
+- **position_check_interval_minutes**: 監視間隔（デフォルト: 10分）
+
+この安全保護機能により、正常な取引処理中に誤ってポジションが強制決済されることを防ぎ、システムの安定性と信頼性を向上させています。 
